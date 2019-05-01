@@ -7,7 +7,7 @@ library(surveyIndex)
 
 cmSize <- 1
 years <- 2010:2018
-# outFolder <- "."
+outFolder <- "."
 genus <- "Solea"
 bfamily <- "solea"
 datafile <- "sole.RData"

@@ -1,40 +1,51 @@
-# install.packages("remotes")
-# install.packages("icesDatras")
-# remotes::install_github("DTUAqua/DATRAS/DATRAS")
-# remotes::install_github("casperwberg/surveyIndex/surveyIndex")
+##install.packages("remotes")
+##install.packages("icesDatras")
+##remotes::install_github("DTUAqua/DATRAS/DATRAS")
+##remotes::install_github("casperwberg/surveyIndex/surveyIndex")
 
-library(maps); library(mapdata);
-library(maptools); library(sp);
+library(maps)
+library(mapdata);
+library(maptools);
+library(sp);
 library(surveyIndex)
+library(DATRAS)
 
 cmSize<-1
-years<-1970:2017 #SNS: 1970, BTS-ISIS: 1985, BTS-BE: 2010
+years<-2010:2018
 outFolder<-"."
 genus<-"Solea"
 bfamily<-"solea"
-datafile<-"nssol.RData"
+datafile<-"sole.RData"
 
 if(!file.exists(datafile)){
-    dAll <- getDatrasExchange("BTS",years=years,quarters=3,strict=FALSE)
-    dAll <-addSpatialData(dAll,"~/Documents/shapefiles/ICES_areas.shp")
-    d <- subset(dAll,Species==paste(genus,bfamily),Quarter==3,Year %in% years,HaulVal=="V",StdSpecRecCode==1)
-    dAll <- NULL
+    BTS <- getDatrasExchange("BTS",years=years,quarters=1:4,strict=FALSE)
+    SNS <- getDatrasExchange("SNS",years=years,quarters=1:4,strict=FALSE)
+    dAll <- c(BTS,SNS)
+    dAll <-addSpatialData(dAll,"ICES_areas/ICES_Areas_20160601_cut_dense_3857.shp")
+    d <- subset(dAll,Species==paste(genus,bfamily),Year %in% years,HaulVal=="V",StdSpecRecCode==1)
+    dAll <- BTS <- SNS <- NULL
     save(d,file=datafile)
 } else {
     load(datafile)
 }
 
+d <- subset(d, Country=="BEL" | (Gear=="BT8" & is.na(Rigging)) |
+                Survey=="SNS")
+xtabs( ~ Gear + Country,data=d[[2]])
+xtabs( ~ Gear + Survey,data=d[[2]])
+
 d <- addSpectrum(d,by=cmSize)
 d <- addWeightByHaul(d)
 
-bubblePlot(d,scale=1/30)
+bubblePlot(d,scale=1/10)
 
 ## Area subsetting (column name "ICES_SUB" may depend on version of shape file)
 names(d[["HH"]])
-d <- subset(d, !ICES_SUB %in% c("20","21","23","VIId"))
-bubblePlot(d)
+d <- subset(d, ICES_SUB %in% c("IVa","IVb","IVc"))
+d <- subset(d, SubArea %in% c("IVa","IVb","IVc"))
+bubblePlot(d,scale=1/10)
 
-## Do we need gear effects? No, only GOV
+## Do we need gear effects? (more than one?)
 summary(d$Gear)
 
 ## impute missing depths
@@ -46,7 +57,7 @@ d$Depth[is.na(d$Depth)] <- exp(predict(dmodel,newdata=selQ1c[[2]]))
 
 ## Check for enough age data in all years
 xtabs(NoAtALK~Year+Age,data=d[["CA"]])
-ages <- 1:6
+ages <- 0:7
 
 ####################
 ## Age-length key 
@@ -63,7 +74,6 @@ maxKs <- 50;
 for(aa in ages){
     d  <- fixAgeGroup(d,age=aa,n=1,fun=ifelse(aa==min(ages),min,mean))
 }
-
 
 add.ALK<-function(d,ages){
     d[[1]] <- subset(d[[1]],Age>=min(ages))
@@ -93,11 +103,11 @@ kvecP  <-  c(16,rep(100,length(ages)-1))
 kvecZ  <-  kvecP/2
 
 ## Time-invariant spatial effect
-modelsStatZ <- rep("Year+s(lon,lat,bs=c('tp'),k=kvecZ[a])+s(Depth,bs='ts',k=6)+offset(log(HaulDur))+s(TimeShotHour,k=5,bs='cc')",length(ages))
-modelsStatP <- rep("Year+s(lon,lat,bs=c('tp'),k=kvecP[a])+s(Depth,bs='ts',k=6)+offset(log(HaulDur)) + s(TimeShotHour,k=5,bs='cc')",length(ages))
+modelsStatZ <- rep("Year+Gear+s(lon,lat,bs=c('tp'),k=kvecZ[a])+s(Depth,bs='ts',k=6)+offset(log(HaulDur))+s(TimeShotHour,k=5,bs='cc')",length(ages))
+modelsStatP <- rep("Year+Gear+s(lon,lat,bs=c('tp'),k=kvecP[a])+s(Depth,bs='ts',k=6)+offset(log(HaulDur)) + s(TimeShotHour,k=5,bs='cc')",length(ages))
 
 ## Time-varying spatial effect
-modelsNonStat <- rep("Year+te(ctime,lon,lat,d=c(1,2),bs=c('cs','tp'),k=c(5,25))+s(Depth,bs='ts',k=6)+offset(log(HaulDur))+s(TimeShotHour,k=5,bs='cc')",length(ages))
+modelsNonStat <- rep("Year+Gear+te(ctime,lon,lat,d=c(1,2),bs=c('cs','tp'),k=c(4,40))+s(Depth,bs='ts',k=6)+offset(log(HaulDur))+s(TimeShotHour,k=5,bs='cc')",length(ages))
 
 tknots  <- list(TimeShotHour=seq(0,24,length=5))
 
@@ -109,54 +119,67 @@ SI  <-  getSurveyIdx(d,ages=ages,myids=grid[[3]],cutOff=0.1,fam=rep("LogNormal",
 
 SI.ns  <-  getSurveyIdx(d,ages=ages,myids=grid[[3]],cutOff=0.1,fam=rep("LogNormal",length(ages)),mc.cores=mc.cores,modelZ=modelsNonStat,modelP=modelsNonStat,kvecP=kvecP,kvecZ=kvecZ,knotsZ=tknots,knotsP=tknots)
 
-SI.alt = SI$idx ## getSurveyIdxStratMean(d,ages)
+SI.ns.tw  <-  getSurveyIdx(d,ages=ages,myids=grid[[3]],cutOff=0.1,fam=rep("Tweedie",length(ages)),mc.cores=mc.cores,modelZ=modelsNonStat,modelP=modelsNonStat,kvecP=kvecP,kvecZ=kvecZ,knotsZ=tknots,knotsP=tknots)
+
+
+final.index = SI.ns.tw
+
+SI.alt = SI.ns$idx ## getSurveyIdxStratMean(d,ages)
 
 
 ## AIC / BIC
 surveyIndex:::AIC.surveyIdx( SI )
 surveyIndex:::AIC.surveyIdx( SI.ns )
+surveyIndex:::AIC.surveyIdx( SI.ns.tw )
+
 surveyIndex:::AIC.surveyIdx( SI, BIC=TRUE )
 surveyIndex:::AIC.surveyIdx( SI.ns, BIC=TRUE )
+surveyIndex:::AIC.surveyIdx( SI.ns.tw, BIC=TRUE )
 
-internalCons(SI$idx)
-internalCons(SI.ns$idx)
+mean(internalCons(SI$idx))
+mean(internalCons(SI.ns$idx))
+mean(internalCons(SI.ns.tw$idx))
+
 
 ## Plots
 
-surveyIdxPlots(SI.ns,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,2),mar=c(4,1,1,1)),select=c("index"),plotByAge=FALSE)
+surveyIdxPlots(final.index,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,3),mar=c(4,1,1,1)),select=c("index"),plotByAge=FALSE)
 
 ## 2nd smooth term (depth)
-surveyIdxPlots(SI.ns,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,2),mar=c(4,3,1,1)),select=c("2"),plotByAge=FALSE)
+surveyIdxPlots(final.index,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,3),mar=c(4,3,1,1)),select=c("2"),plotByAge=FALSE)
 
 ## 3rd smooth term (time of day)
-surveyIdxPlots(SI.ns,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,2),mar=c(4,3,1,1)),select=c("3"),plotByAge=FALSE,ylim=c(-2 ,2),xlim=c(0,24))
+surveyIdxPlots(final.index,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,3),mar=c(4,3,1,1)),select=c("3"),plotByAge=FALSE,ylim=c(-2 ,2),xlim=c(0,24))
 dev.off()
 
 ## residuals
-surveyIdxPlots(SI.ns,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,2),mar=c(4,3,1,1)),select=c("residuals"),plotByAge=FALSE)
-surveyIdxPlots(SI.ns,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,2),mar=c(4,3,1,1)),select=c("fitVsRes"),plotByAge=FALSE)
-surveyIdxPlots(SI.ns,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,2),mar=c(4,3,1,1)),select=c("resVsYear"),plotByAge=FALSE)
-surveyIdxPlots(SI.ns,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,2),mar=c(4,3,1,1)),select=c("resVsShip"),plotByAge=FALSE)
+surveyIdxPlots(final.index,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,3),mar=c(4,3,1,1)),select=c("residuals"),plotByAge=FALSE)
+surveyIdxPlots(final.index,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,3),mar=c(4,3,1,1)),select=c("fitVsRes"),plotByAge=FALSE)
+surveyIdxPlots(final.index,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,3),mar=c(4,3,1,1)),select=c("resVsYear"),plotByAge=FALSE)
+surveyIdxPlots(final.index,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,3),mar=c(4,3,1,1)),select=c("resVsShip"),plotByAge=FALSE)
 
 ## Map from stationary model
-surveyIdxPlots(SI,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,2),mar=c(4,1,1,1)),select=c("map"),plotByAge=FALSE,colors=rev(heat.colors(5))
-
+surveyIdxPlots(SI,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,3),mar=c(4,1,1,1)),select=c("map"),plotByAge=FALSE,colors=rev(heat.colors(5)))
+               
 
 ## maps from non-stationary model
 pdf("maps.pdf",onefile=TRUE)
 for(yy in years){
-    surveyIdxPlots(SI.ns,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,2),mar=c(4,1,1,1)),select=c("map"),plotByAge=FALSE,colors=rev(heat.colors(5)),legend=FALSE,year=yy)
+    surveyIdxPlots(final.index,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,3),mar=c(4,1,1,1)),select=c("map"),plotByAge=FALSE,colors=rev(heat.colors(5)),legend=FALSE,year=yy)
 }
 dev.off()
 
+## Spatial residuals (positive model only)
+surveyIdxPlots(final.index,d,alt.idx=SI.alt,myids=grid[[3]],par=list(mfrow=c(3,3),mar=c(4,3,1,1)),select=c("spatialResiduals"),plotByAge=FALSE,year=2014)
+              
 ## Internal consistency plot using FLCore
-remotes::install_github("flr/FLCore")
+##remotes::install_github("flr/FLCore")
 library(FLCore)
 tofli<-function(x){
     fli <- FLQuant(t(x),dimnames=list(age=colnames(x),year=rownames(x)))
     fli <- FLIndex(index=fli)
 }
-plot(tofli(SI.ns$idx),type="internal",use.rsq=FALSE)
+plot(tofli(final.index$idx),type="internal",use.rsq=FALSE)
 
 ## export to file
-exportSI(SI.ns$idx,ages,years,toy=mean(d[["HH"]]$timeOfYear,na.rm=TRUE),file="index.txt",nam=paste(genus,bfamily," IBTS Q1 - Delta-GAM; Last age is plus group, calculated",Sys.time()))
+exportSI(final.index$idx,ages,years,toy=mean(d[["HH"]]$timeOfYear,na.rm=TRUE),file="index.txt",nam=paste(genus,bfamily," BTS + SNS - Delta-GAM; Last age is plus group, calculated",Sys.time()))
